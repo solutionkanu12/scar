@@ -6,6 +6,7 @@ import readline from "node:readline";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { retrieveFreshSessionEvidence } from "@/server/scar/fresh-session-retrieval";
 import { SibylMemoryClient } from "@/server/scar/sibyl-memory-client";
 
 const timestamp = "2026-09-10T12:00:00.000Z";
@@ -36,12 +37,13 @@ integration("official Sibyl Memory sidecar", () => {
     workspace = null;
   });
 
-  it("persists Scar evidence and audit history through a full service restart", async () => {
+  it("retrieves Treasury evidence for Procurement through a completely fresh process", async () => {
     if (!running || !workspace) throw new Error("sidecar did not start");
     const dbPath = path.join(workspace, "memory.db");
-    const firstClient = clientFor(running.baseUrl);
+    const sessionA = running;
+    const treasuryClient = clientFor(sessionA.baseUrl);
 
-    const receipt = await firstClient.persistScarMemory(validBundle());
+    const receipt = await treasuryClient.persistScarMemory(validBundle());
     expect(receipt).toMatchObject({
       entityMemoryId: expect.any(String),
       incidentMemoryId: expect.any(String),
@@ -49,20 +51,66 @@ integration("official Sibyl Memory sidecar", () => {
       auditMemoryId: expect.any(String),
     });
 
-    await running.stop();
+    await sessionA.stop();
+    expect(sessionA.process.signalCode).not.toBeNull();
     running = await startSidecar(dbPath);
-    const restartedClient = clientFor(running.baseUrl);
+    expect(running.process).not.toBe(sessionA.process);
+    const procurementClient = clientFor(running.baseUrl);
 
-    const evidence = await restartedClient.findRelevantEvidence(validAction());
-    expect(evidence).toEqual({
-      status: "AVAILABLE",
-      lookupId: expect.any(String),
-      entity: validBundle().entity,
-      incidents: [validBundle().incident],
-      safeguards: [validBundle().safeguard],
+    const evidence = await retrieveFreshSessionEvidence({
+      action: validAction(),
+      memory: procurementClient,
     });
+    expect(evidence.status).toBe("AVAILABLE");
+    if (evidence.status !== "AVAILABLE") {
+      throw new Error("fresh Procurement session did not retrieve evidence");
+    }
+    expect(evidence.lookupId).toEqual(expect.any(String));
+    expect(evidence.entity).toEqual({
+      id: "supplier-alpha",
+      name: "Supplier Alpha",
+      externalIdentifier: "0x1111111111111111111111111111111111111111",
+      type: "COUNTERPARTY",
+      createdAt: timestamp,
+    });
+    expect(evidence.incidents).toHaveLength(1);
+    expect(evidence.incidents[0]).toMatchObject({
+      id: "scar-001",
+      sourceAgentId: "agent-treasury",
+      relatedActionId: "action-001",
+      entityId: "supplier-alpha",
+      severity: "CRITICAL",
+      outcome: "The transfer reached an unverified recipient.",
+      evidence: [
+        {
+          kind: "TRANSACTION",
+          reference: "tx-reference-001",
+          observedAt: timestamp,
+        },
+      ],
+      provenance: {
+        source: "OPERATOR_REPORT",
+        recordedBy: "operator-001",
+        observedAt: timestamp,
+      },
+    });
+    expect(evidence.safeguards).toHaveLength(1);
+    expect(evidence.safeguards[0]).toMatchObject({
+      id: "safeguard-001",
+      sourceIncidentId: "scar-001",
+      trigger: {
+        entityId: "supplier-alpha",
+        actionType: "USDC_TRANSFER",
+      },
+      scope: {
+        agentIds: ["agent-treasury", "agent-procurement"],
+      },
+      requiredResponse: "BLOCK",
+      reason: "The recipient must be verified before another transfer.",
+    });
+    expect(evidence).not.toHaveProperty("decision");
 
-    const history = await restartedClient.readAuditHistory({ limit: 20 });
+    const history = await procurementClient.readAuditHistory({ limit: 20 });
     expect(history.events.map((entry) => entry.event.eventType)).toEqual([
       "MEMORY_LOOKUP",
       "SCAR_RECORDED",
@@ -197,6 +245,7 @@ async function startSidecar(dbPath: string): Promise<RunningSidecar> {
   const ready = await waitForReady(process);
   return {
     baseUrl: `http://127.0.0.1:${ready.port}`,
+    process,
     stop: () => stopSidecar(process),
   };
 }
@@ -236,7 +285,7 @@ function waitForReady(
 async function stopSidecar(
   process: ChildProcessWithoutNullStreams,
 ): Promise<void> {
-  if (process.exitCode !== null) return;
+  if (process.exitCode !== null || process.signalCode !== null) return;
   process.kill();
   await new Promise<void>((resolve) => process.once("exit", () => resolve()));
 }
@@ -258,6 +307,7 @@ function processEnvWithoutSecrets(): NodeJS.ProcessEnv {
 
 interface RunningSidecar {
   baseUrl: string;
+  process: ChildProcessWithoutNullStreams;
   stop(): Promise<void>;
 }
 
