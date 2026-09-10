@@ -6,8 +6,10 @@ import readline from "node:readline";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DeterministicActionGate } from "@/server/scar/action-gate";
 import { retrieveFreshSessionEvidence } from "@/server/scar/fresh-session-retrieval";
 import { SibylMemoryClient } from "@/server/scar/sibyl-memory-client";
+import { VolatileScarRepository } from "@/server/scar/volatile-repository";
 
 const timestamp = "2026-09-10T12:00:00.000Z";
 const token = "scar-sibyl-integration-token-001";
@@ -110,12 +112,53 @@ integration("official Sibyl Memory sidecar", () => {
     });
     expect(evidence).not.toHaveProperty("decision");
 
+    const freshSessionRepository = new VolatileScarRepository();
+    await freshSessionRepository.saveAgent({
+      id: "agent-procurement",
+      name: "Procurement Agent",
+      role: "Purchasing",
+      status: "ACTIVE",
+      permissions: ["USDC_TRANSFER"],
+    });
+    await freshSessionRepository.saveAction(validAction());
+    const gate = new DeterministicActionGate({
+      repository: freshSessionRepository,
+      memory: procurementClient,
+      policy: {
+        policyVersion: "scar-policy-v1",
+        maxAmountAtomic: "2000000",
+        reviewAmountAtomic: "1500000",
+        allowedChainIds: [84532],
+      },
+      now: () => timestamp,
+      createAuthorizationId: () => "authorization-fresh-procurement",
+    });
+
+    const decision = await gate.authorize({ actionId: "action-002" });
+
+    expect(decision).toMatchObject({
+      actionId: "action-002",
+      authorizationId: "authorization-fresh-procurement",
+      decision: "BLOCK",
+      reasonCode: "CRITICAL_INCIDENT",
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ reference: "scar-001" }),
+        expect.objectContaining({ reference: "tx-reference-001" }),
+      ]),
+      provenance: {
+        engine: "SCAR_DETERMINISTIC_POLICY",
+        policyVersion: "scar-policy-v1",
+        evaluatedAt: timestamp,
+      },
+    });
+
     const history = await procurementClient.readAuditHistory({ limit: 20 });
     expect(history.events.map((entry) => entry.event.eventType)).toEqual([
       "MEMORY_LOOKUP",
+      "MEMORY_LOOKUP",
       "SCAR_RECORDED",
     ]);
-    expect(history.events[1]?.event).toMatchObject({
+    expect(history.events[2]?.event).toMatchObject({
       id: "audit-001",
       incidentId: "scar-001",
       entityId: "supplier-alpha",
