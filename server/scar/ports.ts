@@ -31,6 +31,14 @@ export interface ScarMemoryPersistence extends MemoryEvidenceProvider {
   readAuditHistory(input: { limit: number }): Promise<SibylAuditHistory>;
 }
 
+export interface ExecutionContext {
+  /** Identity of the deterministic authorization that permitted this action. */
+  authorizationId: string;
+}
+
 export interface ExecutionAdapter {
-  execute(action: ProtectedAction): Promise<unknown>;
+  execute(
+    action: ProtectedAction,
+    context: ExecutionContext,
+  ): Promise<unknown>;
 }

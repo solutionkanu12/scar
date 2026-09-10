@@ -194,7 +194,9 @@ export class ExecutionBoundary {
 
     let adapterOutput: unknown;
     try {
-      adapterOutput = await this.dependencies.adapter.execute(action.data);
+      adapterOutput = await this.dependencies.adapter.execute(action.data, {
+        authorizationId: authorization.data.id,
+      });
     } catch {
       return this.recordFailure(claim, "EXECUTION_ADAPTER_ERROR");
     }

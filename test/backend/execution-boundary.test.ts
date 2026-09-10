@@ -24,7 +24,9 @@ describe("ExecutionBoundary", () => {
       },
     });
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledWith(validAction());
+    expect(execute).toHaveBeenCalledWith(validAction(), {
+      authorizationId: "authorization-001",
+    });
     await expect(
       repository.findAuthorizationForAction("action-001"),
     ).resolves.toMatchObject({ decision: "ALLOW" });
