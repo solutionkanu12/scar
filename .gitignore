@@ -45,6 +45,12 @@ next-env.d.ts
 /outputs/
 /work/
 
+# Local Python/Sibyl runtime state; production storage belongs on a durable mount.
+/services/sibyl/.venv/
+/services/sibyl/*.db
+/services/sibyl/*.db-shm
+/services/sibyl/*.db-wal
+
 # Local agent workspace control files. Keep private unless explicitly requested for commit.
 /project.md
 /status.md
