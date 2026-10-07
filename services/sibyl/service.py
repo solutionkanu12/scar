@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import json
 import os
 import re
@@ -36,30 +37,44 @@ class RequestError(Exception):
 
 
 class ScarSibylStore:
-    def __init__(self, db_path: Path, tenant_id: str) -> None:
-        self.memory = MemoryClient.local(db_path, tenant_id=tenant_id)
+    """Provides an isolated official Sibyl MemoryClient for each SCAR workspace."""
 
-    def persist_bundle(self, raw: Any) -> dict[str, str]:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        self.memories: dict[str, MemoryClient] = {}
+        self.lock = threading.Lock()
+
+    def _memory_for(self, tenant_id: str) -> MemoryClient:
+        tenant = require_identifier(tenant_id, "workspace")
+        with self.lock:
+            memory = self.memories.get(tenant)
+            if memory is None:
+                memory = MemoryClient.local(self.db_path, tenant_id=tenant)
+                self.memories[tenant] = memory
+            return memory
+
+    def persist_bundle(self, tenant_id: str, raw: Any) -> dict[str, str]:
+        memory = self._memory_for(tenant_id)
         bundle = validate_bundle(raw)
         entity = bundle["entity"]
         incident = bundle["incident"]
         safeguard = bundle["safeguard"]
         audit_event = bundle["auditEvent"]
 
-        self._assert_immutable(INCIDENT_CATEGORY, incident["id"], incident)
-        self._assert_immutable(SAFEGUARD_CATEGORY, safeguard["id"], safeguard)
+        self._assert_immutable(memory, INCIDENT_CATEGORY, incident["id"], incident)
+        self._assert_immutable(memory, SAFEGUARD_CATEGORY, safeguard["id"], safeguard)
 
-        entity_row = self.memory.set_entity(
+        entity_row = memory.set_entity(
             ENTITY_CATEGORY, entity["id"], entity, status="active"
         )
-        safeguard_row = self.memory.set_entity(
+        safeguard_row = memory.set_entity(
             SAFEGUARD_CATEGORY, safeguard["id"], safeguard, status="active"
         )
-        incident_row = self.memory.set_entity(
+        incident_row = memory.set_entity(
             INCIDENT_CATEGORY, incident["id"], incident, status="active"
         )
 
-        existing_event = self._find_audit_event(audit_event["id"])
+        existing_event = self._find_audit_event(memory, audit_event["id"])
         if existing_event:
             if existing_event["event"] != audit_event:
                 raise RequestError(
@@ -68,7 +83,7 @@ class ScarSibylStore:
                 )
             audit_memory_id = existing_event["memoryId"]
         else:
-            audit_memory_id = self.memory.write_event(
+            audit_memory_id = memory.write_event(
                 acted=["scar incident persisted"],
                 extra={"scarAuditEvent": audit_event},
                 ts=audit_event["occurredAt"],
@@ -81,12 +96,13 @@ class ScarSibylStore:
             "auditMemoryId": audit_memory_id,
         }
 
-    def relevant_evidence(self, raw: Any) -> dict[str, Any]:
+    def relevant_evidence(self, tenant_id: str, raw: Any) -> dict[str, Any]:
+        memory = self._memory_for(tenant_id)
         request = validate_relevant_request(raw)
-        entity = self._get_body(ENTITY_CATEGORY, request["entityId"])
+        entity = self._get_body(memory, ENTITY_CATEGORY, request["entityId"])
         incidents = [
             row["body"]
-            for row in self.memory.list_entities(
+            for row in memory.list_entities(
                 INCIDENT_CATEGORY, status="active", limit=MAX_RECORDS
             )
             if row["body"].get("entityId") == request["entityId"]
@@ -94,7 +110,7 @@ class ScarSibylStore:
         ]
         safeguards = [
             row["body"]
-            for row in self.memory.list_entities(
+            for row in memory.list_entities(
                 SAFEGUARD_CATEGORY, status="active", limit=MAX_RECORDS
             )
             if row["body"].get("trigger", {}).get("entityId")
@@ -115,7 +131,7 @@ class ScarSibylStore:
             "resultSafeguardIds": [item["id"] for item in safeguards],
             "occurredAt": utc_now(),
         }
-        lookup_id = self.memory.write_event(
+        lookup_id = memory.write_event(
             evaluated=["scar memory evidence lookup"],
             extra={"scarAuditEvent": lookup_event},
             ts=lookup_event["occurredAt"],
@@ -128,34 +144,41 @@ class ScarSibylStore:
             "safeguards": safeguards,
         }
 
-    def audit_history(self, raw: Any) -> dict[str, Any]:
+    def audit_history(self, tenant_id: str, raw: Any) -> dict[str, Any]:
+        memory = self._memory_for(tenant_id)
         request = require_exact_object(raw, {"limit"}, "audit history request")
         limit = request["limit"]
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_RECORDS:
             raise RequestError(HTTPStatus.BAD_REQUEST, "limit must be from 1 to 1000")
         events = []
-        for row in self.memory.read_events(limit=limit):
+        for row in memory.read_events(limit=limit):
             extra = row.get("extra")
             event = extra.get("scarAuditEvent") if isinstance(extra, dict) else None
             if isinstance(event, dict):
                 events.append({"memoryId": row["id"], "event": event})
         return {"events": events}
 
-    def _assert_immutable(self, category: str, name: str, body: dict[str, Any]) -> None:
-        existing = self._get_body(category, name)
+    def _assert_immutable(
+        self, memory: MemoryClient, category: str, name: str, body: dict[str, Any]
+    ) -> None:
+        existing = self._get_body(memory, category, name)
         if existing is not None and existing != body:
             raise RequestError(
                 HTTPStatus.CONFLICT, f"{category} {name} already exists"
             )
 
-    def _get_body(self, category: str, name: str) -> dict[str, Any] | None:
+    def _get_body(
+        self, memory: MemoryClient, category: str, name: str
+    ) -> dict[str, Any] | None:
         try:
-            return self.memory.get_entity(category, name)["body"]
+            return memory.get_entity(category, name)["body"]
         except NotFoundError:
             return None
 
-    def _find_audit_event(self, event_id: str) -> dict[str, Any] | None:
-        for row in self.memory.read_events(limit=10_000):
+    def _find_audit_event(
+        self, memory: MemoryClient, event_id: str
+    ) -> dict[str, Any] | None:
+        for row in memory.read_events(limit=10_000):
             extra = row.get("extra")
             event = extra.get("scarAuditEvent") if isinstance(extra, dict) else None
             if isinstance(event, dict) and event.get("id") == event_id:
@@ -182,13 +205,13 @@ class ScarSibylHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             self.require_authorization()
-            body = self.read_json()
+            workspace_id, body = self.require_signed_tenant_envelope(self.read_json())
             if self.path == "/v1/scar-memory":
-                result = self.server.store.persist_bundle(body)
+                result = self.server.store.persist_bundle(workspace_id, body)
             elif self.path == "/v1/relevant-evidence":
-                result = self.server.store.relevant_evidence(body)
+                result = self.server.store.relevant_evidence(workspace_id, body)
             elif self.path == "/v1/audit-history":
-                result = self.server.store.audit_history(body)
+                result = self.server.store.audit_history(workspace_id, body)
             else:
                 raise RequestError(HTTPStatus.NOT_FOUND, "not found")
             self.send_json(HTTPStatus.OK, result)
@@ -202,6 +225,43 @@ class ScarSibylHandler(BaseHTTPRequestHandler):
         expected = f"Bearer {self.server.token}"
         if not hmac.compare_digest(supplied, expected):
             raise RequestError(HTTPStatus.UNAUTHORIZED, "unauthorized")
+
+    def require_signed_tenant_envelope(self, raw: Any) -> tuple[str, Any]:
+        header_workspace = self.headers.get("X-Scar-Workspace-Id", "")
+        timestamp = self.headers.get("X-Scar-Timestamp", "")
+        signature = self.headers.get("X-Scar-Signature", "")
+        if not header_workspace or not timestamp or not signature:
+            raise RequestError(HTTPStatus.UNAUTHORIZED, "tenant assertion required")
+        envelope = require_exact_object(raw, {"workspaceId", "payload"}, "tenant envelope")
+        workspace_id = require_identifier(envelope["workspaceId"], "workspaceId")
+        payload = envelope["payload"]
+        if not isinstance(payload, str) or not payload or len(payload.encode("utf-8")) > MAX_REQUEST_BYTES:
+            raise RequestError(HTTPStatus.BAD_REQUEST, "invalid tenant payload")
+        if header_workspace != workspace_id:
+            raise RequestError(HTTPStatus.UNAUTHORIZED, "invalid tenant scope")
+        require_timestamp(timestamp, "tenant timestamp")
+        try:
+            parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise RequestError(HTTPStatus.UNAUTHORIZED, "invalid tenant timestamp") from error
+        if abs((datetime.now(timezone.utc) - parsed_timestamp.astimezone(timezone.utc)).total_seconds()) > 300:
+            raise RequestError(HTTPStatus.UNAUTHORIZED, "stale tenant assertion")
+        if not re.fullmatch(r"[a-f0-9]{64}", signature):
+            raise RequestError(HTTPStatus.UNAUTHORIZED, "invalid tenant signature")
+
+        payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        signed = f"POST\n{self.path}\n{workspace_id}\n{timestamp}\n{payload_hash}"
+        expected = hmac.new(
+            self.server.tenant_signing_key.encode("utf-8"),
+            signed.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise RequestError(HTTPStatus.UNAUTHORIZED, "invalid tenant signature")
+        try:
+            return workspace_id, json.loads(payload)
+        except json.JSONDecodeError as error:
+            raise RequestError(HTTPStatus.BAD_REQUEST, "invalid tenant payload") from error
 
     def read_json(self) -> Any:
         raw_length = self.headers.get("Content-Length")
@@ -237,10 +297,12 @@ class ScarSibylServer(ThreadingHTTPServer):
         address: tuple[str, int],
         store: ScarSibylStore,
         token: str,
+        tenant_signing_key: str,
     ) -> None:
         super().__init__(address, ScarSibylHandler)
         self.store = store
         self.token = token
+        self.tenant_signing_key = tenant_signing_key
 
 
 def validate_bundle(raw: Any) -> dict[str, Any]:
@@ -506,14 +568,16 @@ def required_environment(name: str) -> str:
 
 def main() -> None:
     db_path = Path(required_environment("SIBYL_DB_PATH")).expanduser().resolve()
-    tenant_id = require_identifier(required_environment("SIBYL_TENANT_ID"), "tenant")
     token = required_environment("SIBYL_SIDECAR_TOKEN")
     if len(token) < 16:
         raise RuntimeError("SIBYL_SIDECAR_TOKEN must contain at least 16 characters")
+    tenant_signing_key = required_environment("SIBYL_TENANT_SIGNING_KEY")
+    if len(tenant_signing_key) < 32:
+        raise RuntimeError("SIBYL_TENANT_SIGNING_KEY must contain at least 32 characters")
     host = os.environ.get("SIBYL_SIDECAR_HOST", "127.0.0.1")
     port = int(os.environ.get("SIBYL_SIDECAR_PORT", "7331"))
-    store = ScarSibylStore(db_path, tenant_id)
-    server = ScarSibylServer((host, port), store, token)
+    store = ScarSibylStore(db_path)
+    server = ScarSibylServer((host, port), store, token, tenant_signing_key)
     signal.signal(
         signal.SIGTERM,
         lambda *_args: threading.Thread(

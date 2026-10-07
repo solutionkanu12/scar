@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `approvals_action_authorization_unique` ON `approvals` (`action_id`,`authorization_id`);

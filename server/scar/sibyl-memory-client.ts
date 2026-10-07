@@ -30,23 +30,41 @@ const relevantEvidenceRequestSchema = z
 interface SibylMemoryClientOptions {
   baseUrl: string;
   token: string;
+  /** Server-resolved tenant scope; never sourced from external request JSON. */
+  workspaceId: string;
+  /** Shared only by the SCAR worker and its Sibyl sidecar. */
+  tenantSigningKey: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  now?: () => string;
 }
 
 export class SibylMemoryClient implements ScarMemoryPersistence {
   private readonly baseUrl: string;
   private readonly token: string;
+  private readonly workspaceId: string;
+  private readonly tenantSigningKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly now: () => string;
 
   constructor(options: SibylMemoryClientOptions) {
     this.baseUrl = validatedBaseUrl(options.baseUrl);
     this.token = z.string().min(16).max(512).parse(options.token);
+    this.workspaceId = z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+      .parse(options.workspaceId);
+    this.tenantSigningKey = z.string().min(32).max(512).parse(
+      options.tenantSigningKey,
+    );
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = z.number().int().positive().max(60_000).parse(
       options.timeoutMs ?? 5_000,
     );
+    this.now = options.now ?? (() => new Date().toISOString());
   }
 
   async persistScarMemory(input: unknown): Promise<SibylPersistenceReceipt> {
@@ -100,6 +118,13 @@ export class SibylMemoryClient implements ScarMemoryPersistence {
   }
 
   private async post(path: string, body: ScarMemoryBundle | object) {
+    const payload = JSON.stringify(body);
+    const timestamp = this.now();
+    const payloadHash = await sha256Hex(payload);
+    const signature = await hmacSha256Hex(
+      this.tenantSigningKey,
+      `POST\n${path}\n${this.workspaceId}\n${timestamp}\n${payloadHash}`,
+    );
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -107,8 +132,11 @@ export class SibylMemoryClient implements ScarMemoryPersistence {
         headers: {
           authorization: `Bearer ${this.token}`,
           "content-type": "application/json",
+          "x-scar-workspace-id": this.workspaceId,
+          "x-scar-timestamp": timestamp,
+          "x-scar-signature": signature,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ workspaceId: this.workspaceId, payload }),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
@@ -135,6 +163,36 @@ export class SibylMemoryClient implements ScarMemoryPersistence {
       });
     }
   }
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return bytesToHex(digest);
+}
+
+async function hmacSha256Hex(key: string, value: string): Promise<string> {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    new TextEncoder().encode(value),
+  );
+  return bytesToHex(signature);
+}
+
+function bytesToHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 export class SibylUnavailableError extends Error {

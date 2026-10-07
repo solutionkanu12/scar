@@ -9,6 +9,109 @@ A clean full-stack starter running on [vinext](https://github.com/cloudflare/vin
 - Managed Linux: managed Linux runtime with Bash, `flock`, `curl`, `sha256sum`, and GNU `timeout`
 - Git is required only for publishing
 
+## SCAR production API authentication
+
+SCAR's production API is independent of ChatGPT authentication and hosting. The
+prototype helper in `app/chatgpt-auth.ts` remains unmodified for the starter,
+but no SCAR server module imports it. The SCAR routes use a dedicated Supabase
+Auth project for human identity and separate revocable credentials for agents.
+There is deliberately no login UI in this milestone.
+
+### Required external configuration
+
+1. Create a dedicated Supabase Auth project for SCAR. Enable self-service email
+   OTP sign-up (do not enable anonymous users), and configure an asymmetric
+   ES256 or RS256 signing key. SCAR validates `iss`, `aud=authenticated`,
+   `exp`, `sub`, the signature, and the trusted project JWKS. It does not need
+   a Supabase service-role key or browser client key.
+2. Apply migrations `0000_sturdy_sunspot.sql` through
+   `0005_workspace_scope.sql` to production D1 in order. Existing pre-workspace
+   records are retained in a sealed, suspended `workspace:legacy` scope with no
+   membership, so they cannot become public tenant data.
+
+   Any verified human can create a personal or organizational workspace. The
+   creation batch atomically creates one `OWNER` membership and a `DISABLED`
+   execution configuration. OWNER is not an operational or safety role. The
+   owner must explicitly grant `ADMIN`, `OPERATOR`, `APPROVER`, or
+   `SAFETY_OFFICER`, including to themselves; each grant, regrant, and
+   revocation has an append-only D1 role-audit record.
+3. Configure these Worker bindings as server secrets/configuration only:
+
+   ```text
+   SCAR_PUBLIC_ORIGIN
+   SCAR_MULTI_WORKSPACE_OPERATIONS_ENABLED=false
+   SCAR_SUPABASE_AUTH_ISSUER=https://<project-ref>.supabase.co/auth/v1
+   SCAR_AGENT_CREDENTIAL_PEPPER=<at-least-32-random-characters>
+   SCAR_SIBYL_BASE_URL
+   SCAR_SIBYL_TOKEN
+   SCAR_SIBYL_TENANT_SIGNING_KEY=<at-least-32-random-characters>
+   SCAR_POLICY_VERSION
+   SCAR_POLICY_MAX_AMOUNT_ATOMIC
+   SCAR_POLICY_REVIEW_AMOUNT_ATOMIC
+   SCAR_POLICY_ALLOWED_CHAIN_IDS=84532
+   SCAR_BASE_SEPOLIA_RPC_URL
+   SCAR_BASE_EXECUTOR_PRIVATE_KEY
+   SCAR_BASE_EXECUTOR_KEY_REFERENCE=<opaque-runtime-key-reference>
+   SCAR_BASE_USDC_ADDRESS
+   ```
+
+   The JWKS endpoint must be reachable by the Worker. Never expose the Sibyl
+   bearer token, tenant-signing key, credential pepper, or Base private key to
+   a browser, agent, log, or API response. Keep
+   `SCAR_MULTI_WORKSPACE_OPERATIONS_ENABLED=false` until the tenant-aware
+   Sibyl sidecar is deployed and the real two-workspace test has passed.
+
+### API boundary
+
+All responses are `Cache-Control: no-store`; browser requests with an `Origin`
+header must use `SCAR_PUBLIC_ORIGIN`, and no permissive CORS header is emitted.
+Non-browser agents may omit `Origin` and authenticate with their own revocable
+workspace-scoped bearer credential. Requests are byte-limited, strictly
+parsed, rate-limited through atomic D1 counters, and accepted operations receive
+a durable D1 audit record. The workspace path is validated, but the authority
+to use it comes only from D1 membership or the verified credential scope.
+
+| Route | Principal allowed |
+| --- | --- |
+| `POST /api/scar/workspaces` | Any verified human; creates OWNER only |
+| `POST /api/scar/workspaces/:workspaceId/members` | OWNER |
+| `DELETE /api/scar/workspaces/:workspaceId/members/:userId` | OWNER; MEMBER only |
+| `POST/DELETE /api/scar/workspaces/:workspaceId/members/:userId/roles/:role` | OWNER |
+| `POST /api/scar/workspaces/:workspaceId/agents` | OWNER or explicit Admin |
+| `POST/DELETE .../agents/:agentId/credentials` | OWNER or explicit Admin |
+| `POST .../actions`, `evaluate`, `execute` | explicit Admin, Operator, or owning scoped agent |
+| `POST .../approvals` | explicit Admin or Approver; human JWT only |
+| `POST .../incidents`, `outcomes`, `retry` | explicit Admin or Safety Officer; human JWT only |
+| `GET .../actions/:actionId` | an explicit operational/safety role or owning scoped read credential |
+
+Agent credentials are minted by an OWNER or explicit Admin once, returned
+exactly once as `scar_agent_<workspace-id>.<credential-id>.<secret>`, and
+stored only as a SHA-256 hash with a server-side pepper. They are restricted to
+their workspace, registered agent, and `PROPOSE_ACTION`,
+`EVALUATE_ACTION`, `EXECUTE_ACTION`, and/or `READ_ACTION`; they can never
+approve, administer, or report incidents. Store the one-time plaintext token in
+an agent secret manager, rotate by issuing a replacement, and revoke the old
+credential through the workspace route. Revocation is checked from D1 on every
+request.
+
+The human approval record is an exact human approval for a persisted REVIEW
+authorization. It is not described as independent approval: SCAR has no
+two-person approval claim until a separate second-person workflow is added.
+New workspace execution is disabled. Only a server-administered D1 execution
+configuration whose opaque key reference, chain, and token all match the
+private Worker runtime configuration can enable the adapter; no HTTP request
+accepts a private key or enables a signer.
+
+Action proposal and incident recording require an `Idempotency-Key` of 16–96
+safe characters. A reused action key returns only the same original proposal;
+a different proposal is rejected. For incidents, SCAR derives immutable IDs
+from the key. If D1 persisted an incident but Sibyl sharing fails, the API
+returns `503 MEMORY_PERSISTENCE_PENDING` with `memoryShared: false`; a retry
+uses the durable original bundle and cannot replace caller evidence. A failed
+or unconfirmed Base transaction is never represented as safe to replay:
+`ExecutionBoundary` retains the one-time execution claim, so another execute
+request cannot invoke the adapter again.
+
 ## Sites Lifecycle
 
 The Sites initializer copies the shared starter with the explicit `--execution-profile portable` or `--execution-profile managed-linux` argument from the plugin's setup instructions. It saves the selection only in ignored `.sites-runtime/execution-profile.json`. Both profiles copy/configure first, then use the plugin's separate `install-dependencies.mjs` step to measure installation independently. Edit source under `app/` and follow the Sites skill for installation, preview, builds, and publishing.

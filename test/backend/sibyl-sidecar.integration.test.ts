@@ -13,6 +13,7 @@ import { VolatileScarRepository } from "@/server/scar/volatile-repository";
 
 const timestamp = "2026-09-10T12:00:00.000Z";
 const token = "scar-sibyl-integration-token-001";
+const tenantSigningKey = "scar-sibyl-tenant-signing-key-001";
 const python = resolveUvPython();
 const integration = python ? describe : describe.skip;
 
@@ -43,7 +44,7 @@ integration("official Sibyl Memory sidecar", () => {
     if (!running || !workspace) throw new Error("sidecar did not start");
     const dbPath = path.join(workspace, "memory.db");
     const sessionA = running;
-    const treasuryClient = clientFor(sessionA.baseUrl);
+    const treasuryClient = clientFor(sessionA.baseUrl, "workspace-alpha");
 
     const receipt = await treasuryClient.persistScarMemory(validBundle());
     expect(receipt).toMatchObject({
@@ -57,7 +58,7 @@ integration("official Sibyl Memory sidecar", () => {
     expect(sessionA.process.signalCode).not.toBeNull();
     running = await startSidecar(dbPath);
     expect(running.process).not.toBe(sessionA.process);
-    const procurementClient = clientFor(running.baseUrl);
+    const procurementClient = clientFor(running.baseUrl, "workspace-alpha");
 
     const evidence = await retrieveFreshSessionEvidence({
       action: validAction(),
@@ -168,7 +169,7 @@ integration("official Sibyl Memory sidecar", () => {
 
   it("refuses to rewrite an existing incident with different content", async () => {
     if (!running) throw new Error("sidecar did not start");
-    const client = clientFor(running.baseUrl);
+    const client = clientFor(running.baseUrl, "workspace-alpha");
     await client.persistScarMemory(validBundle());
     const changed = validBundle();
     changed.incident.outcome = "A rewritten outcome must not replace history.";
@@ -215,8 +216,11 @@ integration("official Sibyl Memory sidecar", () => {
       body: JSON.stringify(unauthorized),
     });
 
-    expect(response.status).toBe(400);
-    const evidence = await clientFor(running.baseUrl).findRelevantEvidence(
+    expect(response.status).toBe(401);
+    const evidence = await clientFor(
+      running.baseUrl,
+      "workspace-alpha",
+    ).findRelevantEvidence(
       validAction(),
     );
     expect(evidence.incidents).toEqual([]);
@@ -236,7 +240,7 @@ integration("official Sibyl Memory sidecar", () => {
 
   it("returns learned safeguards only to agents in their declared scope", async () => {
     if (!running) throw new Error("sidecar did not start");
-    const client = clientFor(running.baseUrl);
+    const client = clientFor(running.baseUrl, "workspace-alpha");
     const original = validBundle();
     const treasuryOnlyBundle = {
       ...original,
@@ -263,10 +267,45 @@ integration("official Sibyl Memory sidecar", () => {
       procurementEvidence.safeguards.map((safeguard) => safeguard.id),
     ).toEqual(["safeguard-001"]);
   });
+
+  it("isolates tenants even when unrelated workspaces use identical SCAR identifiers", async () => {
+    if (!running) throw new Error("sidecar did not start");
+    const alpha = clientFor(running.baseUrl, "workspace-alpha");
+    const beta = clientFor(running.baseUrl, "workspace-beta");
+
+    await alpha.persistScarMemory(validBundle());
+
+    await expect(beta.findRelevantEvidence(validAction())).resolves.toMatchObject({
+      entity: null,
+      incidents: [],
+      safeguards: [],
+    });
+
+    // These IDs intentionally collide with Alpha's bundle. Isolation must be
+    // provided by the signed tenant scope rather than callers changing IDs.
+    await beta.persistScarMemory(validBundle());
+    await expect(alpha.findRelevantEvidence(validAction())).resolves.toMatchObject({
+      incidents: [expect.objectContaining({ id: "scar-001" })],
+    });
+    await expect(beta.findRelevantEvidence(validAction())).resolves.toMatchObject({
+      incidents: [expect.objectContaining({ id: "scar-001" })],
+    });
+
+    const alphaHistory = await alpha.readAuditHistory({ limit: 20 });
+    const betaHistory = await beta.readAuditHistory({ limit: 20 });
+    expect(alphaHistory.events.filter((entry) => entry.event.id === "audit-001")).toHaveLength(1);
+    expect(betaHistory.events.filter((entry) => entry.event.id === "audit-001")).toHaveLength(1);
+  });
 });
 
-function clientFor(baseUrl: string) {
-  return new SibylMemoryClient({ baseUrl, token, timeoutMs: 10_000 });
+function clientFor(baseUrl: string, workspaceId: string) {
+  return new SibylMemoryClient({
+    baseUrl,
+    token,
+    workspaceId,
+    tenantSigningKey,
+    timeoutMs: 10_000,
+  });
 }
 
 async function startSidecar(dbPath: string): Promise<RunningSidecar> {
@@ -276,10 +315,10 @@ async function startSidecar(dbPath: string): Promise<RunningSidecar> {
     env: {
       ...processEnvWithoutSecrets(),
       SIBYL_DB_PATH: dbPath,
-      SIBYL_TENANT_ID: "scar-integration-test",
       SIBYL_SIDECAR_HOST: "127.0.0.1",
       SIBYL_SIDECAR_PORT: "0",
       SIBYL_SIDECAR_TOKEN: token,
+      SIBYL_TENANT_SIGNING_KEY: tenantSigningKey,
       SIBYL_MEMORY_TELEMETRY: "0",
     },
     stdio: ["pipe", "pipe", "pipe"],

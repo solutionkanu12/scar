@@ -1,5 +1,48 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "entries": []
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790788288968,
+      "tag": "0000_sturdy_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790853934793,
+      "tag": "0001_furry_magma",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790951407736,
+      "tag": "0002_salty_aqueduct",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790990471967,
+      "tag": "0003_cultured_lady_ursula",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791029028966,
+      "tag": "0004_flimsy_supernaut",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791029388559,
+      "tag": "0005_workspace_scope",
+      "breakpoints": true
+    }
+  ]
 }

@@ -17,18 +17,21 @@ Base, or Virtuals capability.
 - Keep the default loopback bind when Scar and the sidecar share a host. If the
   sidecar crosses a network boundary, put it on a private network behind TLS;
   the TypeScript client rejects non-loopback plaintext HTTP.
-- `SIBYL_SIDECAR_TOKEN` is a server-side service credential. Use at least 16
+- `SIBYL_SIDECAR_TOKEN` is a server-side bearer credential. Use at least 16
   characters and never expose it to the browser or logs.
-- Keep `SIBYL_TENANT_ID` stable across restarts. It defines the Sibyl tenant
-  namespace used by this Scar deployment.
+- `SIBYL_TENANT_SIGNING_KEY` is a separate server/sidecar secret of at least 32
+  characters. For every memory request, the SCAR worker HMAC-signs the method,
+  route, workspace ID, timestamp, and payload hash. The sidecar verifies that
+  assertion before selecting a `MemoryClient.local(..., tenant_id=workspace)`.
+  A bearer token alone therefore cannot select another tenant.
 
 Required environment variables:
 
 | Variable | Purpose |
 | --- | --- |
 | `SIBYL_DB_PATH` | Absolute or service-relative path to the durable SQLite file |
-| `SIBYL_TENANT_ID` | Stable Sibyl tenant identifier |
 | `SIBYL_SIDECAR_TOKEN` | Shared bearer credential for the Scar server |
+| `SIBYL_TENANT_SIGNING_KEY` | HMAC key for authenticated per-workspace tenant assertions |
 
 Optional environment variables are `SIBYL_SIDECAR_HOST` (default
 `127.0.0.1`) and `SIBYL_SIDECAR_PORT` (default `7331`).
@@ -42,8 +45,8 @@ production requirement.
 ```powershell
 uv sync --project services/sibyl --frozen --python 3.12
 $env:SIBYL_DB_PATH = "services/sibyl/development.db"
-$env:SIBYL_TENANT_ID = "scar-development"
 $env:SIBYL_SIDECAR_TOKEN = "replace-with-a-local-secret"
+$env:SIBYL_TENANT_SIGNING_KEY = "replace-with-a-second-local-secret"
 uv run --project services/sibyl --frozen --python 3.12 -- python services/sibyl/service.py
 ```
 

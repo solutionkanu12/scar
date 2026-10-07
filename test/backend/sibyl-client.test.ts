@@ -43,6 +43,8 @@ describe("SibylMemoryClient", () => {
     const client = new SibylMemoryClient({
       baseUrl: "http://127.0.0.1:7331",
       token: "test-sidecar-token",
+      workspaceId: "workspace-alpha",
+      tenantSigningKey: "test-sibyl-tenant-signing-key-001",
       fetchImpl,
     });
 
@@ -61,6 +63,9 @@ describe("SibylMemoryClient", () => {
         headers: expect.objectContaining({
           authorization: "Bearer test-sidecar-token",
           "content-type": "application/json",
+          "x-scar-workspace-id": "workspace-alpha",
+          "x-scar-timestamp": expect.any(String),
+          "x-scar-signature": expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       }),
     );
@@ -73,6 +78,8 @@ describe("SibylMemoryClient", () => {
     const client = new SibylMemoryClient({
       baseUrl: "http://127.0.0.1:7331",
       token: "test-sidecar-token",
+      workspaceId: "workspace-alpha",
+      tenantSigningKey: "test-sibyl-tenant-signing-key-001",
       fetchImpl,
     });
 
@@ -93,6 +100,8 @@ describe("SibylMemoryClient", () => {
     const client = new SibylMemoryClient({
       baseUrl: "http://127.0.0.1:7331",
       token: "test-sidecar-token",
+      workspaceId: "workspace-alpha",
+      tenantSigningKey: "test-sibyl-tenant-signing-key-001",
       fetchImpl,
     });
 
@@ -113,6 +122,8 @@ describe("SibylMemoryClient", () => {
     const client = new SibylMemoryClient({
       baseUrl: "http://127.0.0.1:7331",
       token: "test-sidecar-token",
+      workspaceId: "workspace-alpha",
+      tenantSigningKey: "test-sibyl-tenant-signing-key-001",
       fetchImpl,
     });
 
