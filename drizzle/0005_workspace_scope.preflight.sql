@@ -8,7 +8,9 @@
 -- apply 0005 until every FAIL row is resolved. A SQL error also means FAIL:
 -- the database is not at the expected 0000-0004 legacy schema.
 WITH
-  issues(check_name, detail, affected_rows) AS (
+  -- D1 limits compound SELECT statements to five terms. Keep each validation
+  -- group materialized, then combine the small groups below.
+  issues_1(check_name, detail, affected_rows) AS MATERIALIZED (
     -- 0005 uses INSERT OR IGNORE for this sealed namespace. A pre-existing
     -- namespace could expose historical records or leave execution enabled.
     SELECT
@@ -46,7 +48,8 @@ WITH
     WHERE workspace_id = 'workspace:legacy'
     HAVING COUNT(*) > 0
 
-    UNION ALL
+  ),
+  issues_2(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT
       'legacy_workspace_namespace_already_present',
       'workspace:legacy exists in scar_workspace_role_audit_events',
@@ -79,7 +82,8 @@ WITH
     UNION ALL
     SELECT 'actions_workspace_legacy_id_collision', 'id=' || id, COUNT(*) - 1
     FROM protected_actions GROUP BY id HAVING COUNT(*) > 1
-    UNION ALL
+  ),
+  issues_3(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT 'incidents_workspace_legacy_id_collision', 'id=' || id, COUNT(*) - 1
     FROM incidents GROUP BY id HAVING COUNT(*) > 1
     UNION ALL
@@ -91,7 +95,8 @@ WITH
     UNION ALL
     SELECT 'agent_credentials_workspace_legacy_secret_hash_collision', 'secret_hash=' || secret_hash, COUNT(*) - 1
     FROM scar_agent_credentials GROUP BY secret_hash HAVING COUNT(*) > 1
-    UNION ALL
+  ),
+  issues_4(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT 'http_audits_workspace_legacy_id_collision', 'id=' || id, COUNT(*) - 1
     FROM scar_http_audit_events GROUP BY id HAVING COUNT(*) > 1
     UNION ALL
@@ -103,7 +108,8 @@ WITH
     UNION ALL
     SELECT 'approvals_workspace_legacy_id_collision', 'id=' || id, COUNT(*) - 1
     FROM approvals GROUP BY id HAVING COUNT(*) > 1
-    UNION ALL
+  ),
+  issues_5(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT
       'approvals_workspace_legacy_logical_collision',
       'action_id=' || action_id || '; authorization_id=' || authorization_id,
@@ -126,7 +132,8 @@ WITH
       role IS NULL OR trim(role) = '' OR status IS NULL OR trim(status) = '' OR
       permissions IS NULL OR trim(permissions) = ''
     HAVING COUNT(*) > 0
-    UNION ALL
+  ),
+  issues_6(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT 'actions_required_value_invalid', 'one or more required values are NULL or empty', COUNT(*)
     FROM protected_actions
     WHERE id IS NULL OR trim(id) = '' OR agent_id IS NULL OR trim(agent_id) = '' OR
@@ -158,7 +165,8 @@ WITH
       status IS NULL OR trim(status) = '' OR created_at IS NULL OR trim(created_at) = '' OR
       expires_at IS NULL OR trim(expires_at) = ''
     HAVING COUNT(*) > 0
-    UNION ALL
+  ),
+  issues_7(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT 'http_audits_required_value_invalid', 'one or more required values are NULL or empty', COUNT(*)
     FROM scar_http_audit_events
     WHERE id IS NULL OR trim(id) = '' OR organization_id IS NULL OR trim(organization_id) = '' OR
@@ -188,7 +196,8 @@ WITH
       authorization_id IS NULL OR trim(authorization_id) = '' OR approved_by IS NULL OR trim(approved_by) = '' OR
       approved_at IS NULL OR trim(approved_at) = ''
     HAVING COUNT(*) > 0
-    UNION ALL
+  ),
+  issues_8(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT 'executions_required_value_invalid', 'one or more required values are NULL or empty', COUNT(*)
     FROM executions
     WHERE action_id IS NULL OR trim(action_id) = '' OR id IS NULL OR trim(id) = '' OR
@@ -219,7 +228,8 @@ WITH
       (evidence IS NOT NULL AND json_valid(evidence) = 0) OR
       (provenance IS NOT NULL AND json_valid(provenance) = 0)
     HAVING COUNT(*) > 0
-    UNION ALL
+  ),
+  issues_9(check_name, detail, affected_rows) AS MATERIALIZED (
     SELECT 'incident_memory_bundle_malformed_json', 'bundle is not valid JSON', COUNT(*)
     FROM incident_memory_bundles WHERE bundle IS NOT NULL AND json_valid(bundle) = 0
     HAVING COUNT(*) > 0
@@ -234,6 +244,23 @@ WITH
     WHERE (evidence IS NOT NULL AND json_valid(evidence) = 0) OR
       (provenance IS NOT NULL AND json_valid(provenance) = 0)
     HAVING COUNT(*) > 0
+  ),
+  issues_left(check_name, detail, affected_rows) AS MATERIALIZED (
+    SELECT * FROM issues_1
+    UNION ALL SELECT * FROM issues_2
+    UNION ALL SELECT * FROM issues_3
+    UNION ALL SELECT * FROM issues_4
+  ),
+  issues_right(check_name, detail, affected_rows) AS MATERIALIZED (
+    SELECT * FROM issues_5
+    UNION ALL SELECT * FROM issues_6
+    UNION ALL SELECT * FROM issues_7
+    UNION ALL SELECT * FROM issues_8
+    UNION ALL SELECT * FROM issues_9
+  ),
+  issues(check_name, detail, affected_rows) AS MATERIALIZED (
+    SELECT * FROM issues_left
+    UNION ALL SELECT * FROM issues_right
   ),
   summary(affected_rows) AS (
     SELECT COALESCE(SUM(affected_rows), 0) FROM issues

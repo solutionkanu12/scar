@@ -190,4 +190,31 @@ describe("0005 workspace migration hygiene", () => {
       expect(sql).toContain(check);
     }
   });
+
+  it("keeps every materialized preflight compound SELECT within D1's five-term limit", () => {
+    const sql = preflightSql();
+    const groups = [
+      "issues_1",
+      "issues_2",
+      "issues_3",
+      "issues_4",
+      "issues_5",
+      "issues_6",
+      "issues_7",
+      "issues_8",
+      "issues_9",
+      "issues_left",
+      "issues_right",
+      "issues",
+    ];
+
+    for (const name of groups) {
+      const match = sql.match(
+        new RegExp(`${name}\\(check_name, detail, affected_rows\\) AS MATERIALIZED \\(([\\s\\S]*?)\\n  \\),`),
+      );
+      expect(match?.[1], `${name} must remain a materialized validation group`).toBeDefined();
+      const terms = match?.[1].match(/(?:^|\n)\s*(?:UNION ALL\s+)?SELECT\b/gm) ?? [];
+      expect(terms.length, `${name} exceeds D1's compound SELECT limit`).toBeLessThanOrEqual(5);
+    }
+  });
 });

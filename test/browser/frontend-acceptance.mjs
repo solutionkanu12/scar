@@ -4,7 +4,19 @@ import process from "node:process";
 
 import { chromium } from "playwright";
 
-const baseUrl = "http://localhost:5173";
+const configuredBaseUrl = process.env.SCAR_BROWSER_BASE_URL ?? "http://localhost:5173";
+let baseUrl;
+try {
+  const url = new URL(configuredBaseUrl);
+  if (!/^https?:$/.test(url.protocol) || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("must be an HTTP(S) origin without a path, query, or fragment");
+  }
+  baseUrl = url.origin;
+} catch (error) {
+  throw new Error(
+    `Invalid SCAR_BROWSER_BASE_URL: ${error instanceof Error ? error.message : "invalid URL"}`,
+  );
+}
 const outputDirectory = path.join(process.env.TEMP, "scar-browser-qa");
 const requiredViewports = [
   { width: 320, height: 800 },
