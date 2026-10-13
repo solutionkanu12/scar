@@ -68,6 +68,8 @@ export interface ProductionScarHttpApi {
   forWorkspace(workspaceId: string): ReturnType<typeof createScarHttpApi>;
   /** Legacy singleton routes are deliberately fail-closed. */
   registerAgent(...args: unknown[]): Promise<Response>;
+  getAgent(...args: unknown[]): Promise<Response>;
+  listAgents(...args: unknown[]): Promise<Response>;
   issueAgentCredential(...args: unknown[]): Promise<Response>;
   revokeAgentCredential(...args: unknown[]): Promise<Response>;
   proposeAction(...args: unknown[]): Promise<Response>;
@@ -78,6 +80,7 @@ export interface ProductionScarHttpApi {
   recordOutcome(...args: unknown[]): Promise<Response>;
   retryIncident(...args: unknown[]): Promise<Response>;
   getActionState(...args: unknown[]): Promise<Response>;
+  listActionStates(...args: unknown[]): Promise<Response>;
 }
 
 let productionApi: ProductionScarHttpApi | null = null;
@@ -160,6 +163,8 @@ export function createProductionScarHttpApi(
     }),
     forWorkspace,
     registerAgent: retiredSingletonRoute,
+    getAgent: retiredSingletonRoute,
+    listAgents: retiredSingletonRoute,
     issueAgentCredential: retiredSingletonRoute,
     revokeAgentCredential: retiredSingletonRoute,
     proposeAction: retiredSingletonRoute,
@@ -170,6 +175,7 @@ export function createProductionScarHttpApi(
     recordOutcome: retiredSingletonRoute,
     retryIncident: retiredSingletonRoute,
     getActionState: retiredSingletonRoute,
+    listActionStates: retiredSingletonRoute,
   };
 }
 

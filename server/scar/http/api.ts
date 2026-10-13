@@ -86,6 +86,9 @@ const credentialIssueSchema = z
       .min(1)
       .max(4),
     expiresAt: z.string().datetime({ offset: true }),
+    // The issuer creates this browser- or caller-local value. 48 random bytes
+    // encode to precisely 64 unpadded base64url characters.
+    secret: z.string().regex(/^[A-Za-z0-9_-]{64}$/),
   })
   .strict()
   .superRefine((credential, context) => {
@@ -105,6 +108,7 @@ type ScarServicePort = Pick<
   ScarService,
   | "registerAgent"
   | "getAgent"
+  | "listAgents"
   | "proposeAction"
   | "evaluateAction"
   | "approveAction"
@@ -113,6 +117,7 @@ type ScarServicePort = Pick<
   | "recordOutcome"
   | "retryIncident"
   | "getActionState"
+  | "listActionStates"
 >;
 
 export interface ScarHttpSecurityPort {
@@ -153,7 +158,6 @@ export interface ScarHttpApiDependencies {
   agentCredentialPepper?: string;
   now?: () => string;
   createId?: () => string;
-  createCredentialSecret?: () => string;
   executionConfigurationAllows?: (input: {
     workspaceId: string;
     configuration: Awaited<
@@ -166,6 +170,8 @@ export function createScarHttpApi(dependencies: ScarHttpApiDependencies) {
   const api = new ScarHttpApi(dependencies);
   return {
     registerAgent: api.registerAgent.bind(api),
+    getAgent: api.getAgent.bind(api),
+    listAgents: api.listAgents.bind(api),
     issueAgentCredential: api.issueAgentCredential.bind(api),
     revokeAgentCredential: api.revokeAgentCredential.bind(api),
     proposeAction: api.proposeAction.bind(api),
@@ -176,19 +182,17 @@ export function createScarHttpApi(dependencies: ScarHttpApiDependencies) {
     recordOutcome: api.recordOutcome.bind(api),
     retryIncident: api.retryIncident.bind(api),
     getActionState: api.getActionState.bind(api),
+    listActionStates: api.listActionStates.bind(api),
   };
 }
 
 class ScarHttpApi {
   private readonly now: () => string;
   private readonly createId: () => string;
-  private readonly createCredentialSecret: () => string;
 
   constructor(private readonly dependencies: ScarHttpApiDependencies) {
     this.now = dependencies.now ?? (() => new Date().toISOString());
     this.createId = dependencies.createId ?? (() => crypto.randomUUID());
-    this.createCredentialSecret =
-      dependencies.createCredentialSecret ?? generateCredentialSecret;
   }
 
   async registerAgent(request: Request): Promise<Response> {
@@ -197,6 +201,22 @@ class ScarHttpApi {
       const agent = await this.dependencies.service.registerAgent(input);
       return jsonResponse({ agent }, 201);
     });
+  }
+
+  async getAgent(request: Request, agentId: string): Promise<Response> {
+    return this.access(request, "AGENT_READ", async () => {
+      const agent = await this.dependencies.service.getAgent(
+        identifierSchema.parse(agentId),
+      );
+      if (!agent) throw new ApiError(404, "AGENT_NOT_FOUND");
+      return jsonResponse({ agent }, 200);
+    });
+  }
+
+  async listAgents(request: Request): Promise<Response> {
+    return this.access(request, "AGENT_READ", async () =>
+      jsonResponse({ agents: await this.dependencies.service.listAgents() }, 200),
+    );
   }
 
   async issueAgentCredential(request: Request, agentId: string): Promise<Response> {
@@ -220,8 +240,7 @@ class ScarHttpApi {
         throw new ApiError(503, "CONFIGURATION_INVALID");
       }
       const id = `credential:${this.createId()}`;
-      const secret = this.createCredentialSecret();
-      const secretHash = await hashAgentCredentialSecret(secret, pepper);
+      const secretHash = await hashAgentCredentialSecret(input.secret, pepper);
       const credential: AgentCredentialRecord = {
         workspaceId: this.dependencies.workspaceId,
         id,
@@ -234,16 +253,19 @@ class ScarHttpApi {
       };
       await this.dependencies.security.saveAgentCredential(credential);
 
-      // This is the only response that includes the raw credential secret.
+      // Metadata only. The caller-generated secret is never returned, stored,
+      // or copied into the assembled bearer form by SCAR.
       return jsonResponse(
         {
           credential: {
             id: credential.id,
+            workspaceId: credential.workspaceId,
             agentId: credential.agentId,
             allowedOperations: credential.allowedOperations,
+            status: credential.status,
+            createdAt: credential.createdAt,
             expiresAt: credential.expiresAt,
           },
-          token: `scar_agent_${this.dependencies.workspaceId}.${id}.${secret}`,
         },
         201,
       );
@@ -403,6 +425,12 @@ class ScarHttpApi {
       // This returns the repository-backed service state exactly as stored.
       return jsonResponse({ state }, 200);
     });
+  }
+
+  async listActionStates(request: Request): Promise<Response> {
+    return this.access(request, "ACTION_READ", async () =>
+      jsonResponse({ states: await this.dependencies.service.listActionStates() }, 200),
+    );
   }
 
   private async recordActionIncident(
@@ -623,6 +651,7 @@ class ScarHttpApi {
 }
 
 function roleAllows(role: ScarRole, operation: HttpOperation): boolean {
+  if (operation === "AGENT_READ") return role === "ADMIN";
   if (role === "ADMIN") return true;
   if (operation === "ACTION_READ") return true;
   if (role === "OPERATOR") {
@@ -645,6 +674,7 @@ function ownerAllows(
     membership.membership === "OWNER" &&
     [
       "AGENT_REGISTRATION",
+      "AGENT_READ",
       "CREDENTIAL_ISSUE",
       "CREDENTIAL_REVOCATION",
     ].includes(operation)
@@ -754,13 +784,6 @@ function idempotencyKey(request: Request): string {
     .safeParse(value);
   if (!parsed.success) throw new ApiError(400, "IDEMPOTENCY_KEY_REQUIRED");
   return parsed.data;
-}
-
-function generateCredentialSecret(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 class ApiError extends Error {

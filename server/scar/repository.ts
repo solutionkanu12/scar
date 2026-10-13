@@ -18,9 +18,11 @@ export interface ScarRepository {
 
   saveAgent(input: unknown): Promise<Agent>;
   findAgentById(id: string): Promise<Agent | null>;
+  listAgents(): Promise<Agent[]>;
 
   saveAction(input: unknown): Promise<ProtectedAction>;
   findActionById(id: string): Promise<ProtectedAction | null>;
+  listActions(): Promise<ProtectedAction[]>;
 
   appendIncident(input: unknown): Promise<Incident>;
   findIncidentById(id: string): Promise<Incident | null>;

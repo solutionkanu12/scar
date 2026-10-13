@@ -15,7 +15,8 @@ SCAR's production API is independent of ChatGPT authentication and hosting. The
 prototype helper in `app/chatgpt-auth.ts` remains unmodified for the starter,
 but no SCAR server module imports it. The SCAR routes use a dedicated Supabase
 Auth project for human identity and separate revocable credentials for agents.
-There is deliberately no login UI in this milestone.
+The browser login UI uses only Supabase's public project URL and publishable
+key; it sends the resulting access token to SCAR as a Bearer token.
 
 ### Required external configuration
 
@@ -23,7 +24,7 @@ There is deliberately no login UI in this milestone.
    OTP sign-up (do not enable anonymous users), and configure an asymmetric
    ES256 or RS256 signing key. SCAR validates `iss`, `aud=authenticated`,
    `exp`, `sub`, the signature, and the trusted project JWKS. It does not need
-   a Supabase service-role key or browser client key.
+   a Supabase service-role key.
 2. Apply migrations `0000_sturdy_sunspot.sql` through
    `0005_workspace_scope.sql` to production D1 in order. Existing pre-workspace
    records are retained in a sealed, suspended `workspace:legacy` scope with no
@@ -55,6 +56,17 @@ There is deliberately no login UI in this milestone.
    SCAR_BASE_USDC_ADDRESS
    ```
 
+   The browser has a separate, deliberately public configuration surface:
+
+   ```text
+   NEXT_PUBLIC_SCAR_SUPABASE_URL=https://<project-ref>.supabase.co
+   NEXT_PUBLIC_SCAR_SUPABASE_PUBLISHABLE_KEY=<Supabase publishable or anon key>
+   ```
+
+   These values are only for Supabase Auth in the browser. Never prefix server
+   secrets with `NEXT_PUBLIC_`, including D1, Sibyl, signer, agent-pepper, or
+   tenant-signing configuration.
+
    The JWKS endpoint must be reachable by the Worker. Never expose the Sibyl
    bearer token, tenant-signing key, credential pepper, or Base private key to
    a browser, agent, log, or API response. Keep
@@ -84,10 +96,12 @@ to use it comes only from D1 membership or the verified credential scope.
 | `POST .../incidents`, `outcomes`, `retry` | explicit Admin or Safety Officer; human JWT only |
 | `GET .../actions/:actionId` | an explicit operational/safety role or owning scoped read credential |
 
-Agent credentials are minted by an OWNER or explicit Admin once, returned
-exactly once as `scar_agent_<workspace-id>.<credential-id>.<secret>`, and
-stored only as a SHA-256 hash with a server-side pepper. They are restricted to
-their workspace, registered agent, and `PROPOSE_ACTION`,
+Agent credentials use a caller-generated 48-byte base64url secret. The
+issuance API accepts that secret, stores only its SHA-256 hash with a
+server-side pepper, and returns metadata only. The caller assembles
+`scar_agent_<workspace-id>.<credential-id>.<secret>` locally; SCAR never
+returns, stores, or logs the raw secret or assembled bearer credential. They
+are restricted to their workspace, registered agent, and `PROPOSE_ACTION`,
 `EVALUATE_ACTION`, `EXECUTE_ACTION`, and/or `READ_ACTION`; they can never
 approve, administer, or report incidents. Store the one-time plaintext token in
 an agent secret manager, rotate by issuing a replacement, and revoke the old
@@ -181,7 +195,11 @@ export default async function Home() {
 }
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+## Starter-only ChatGPT Sign-In (not SCAR)
+
+SCAR does not import or use this helper. Its authentication boundary is the
+dedicated Supabase project described above; do not use ChatGPT-hosting identity
+code for SCAR users, workspace access, or API requests.
 
 Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs optional or required ChatGPT sign-in:
 

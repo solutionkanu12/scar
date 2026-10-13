@@ -53,6 +53,10 @@ export class VolatileScarRepository implements ScarRepository {
     return this.copyOrNull(this.agents.get(id));
   }
 
+  async listAgents(): Promise<Agent[]> {
+    return [...this.agents.values()].map((agent) => structuredClone(agent));
+  }
+
   async saveAction(input: unknown): Promise<ProtectedAction> {
     const action = protectedActionSchema.parse(input);
     this.assertAbsent(this.actions, action.id, "Action");
@@ -61,6 +65,12 @@ export class VolatileScarRepository implements ScarRepository {
 
   async findActionById(id: string): Promise<ProtectedAction | null> {
     return this.copyOrNull(this.actions.get(id));
+  }
+
+  async listActions(): Promise<ProtectedAction[]> {
+    return [...this.actions.values()]
+      .sort((left, right) => right.proposedAt.localeCompare(left.proposedAt))
+      .map((action) => structuredClone(action));
   }
 
   async appendIncident(input: unknown): Promise<Incident> {

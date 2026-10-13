@@ -33,11 +33,11 @@ describe("Scar public and legal surfaces", () => {
     expect(screen.getByRole("heading", { name: "Privacy Policy" })).toBeInTheDocument();
   });
 
-  it("opens the operator console from the public page", () => {
+  it("opens the authenticated console boundary from the public page", () => {
     render(<ScarApp />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Open Scar" })[0]);
-    expect(screen.getByRole("heading", { name: "Every action carries what your agents learned." })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sign in to SCAR" })).toBeInTheDocument();
   });
 
   it("keeps unavailable social and email destinations explicit and inert", () => {

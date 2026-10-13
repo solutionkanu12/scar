@@ -80,6 +80,71 @@ describe("SupabaseJwksIdentityProvider", () => {
     });
   });
 
+  it("accepts a valid ES256 Supabase JWT verified by a controlled local JWK", async () => {
+    const { privateKey, publicKey } = await generateKeyPair("ES256");
+    const publicJwk = await exportJWK(publicKey);
+    publicJwk.kid = "scar-test-key";
+    publicJwk.alg = "ES256";
+    const issuer = "https://scar-auth.supabase.co/auth/v1";
+    const provider = new SupabaseJwksIdentityProvider({
+      issuer,
+      verifyJwt: createSupabaseJwtVerifier({
+        issuer,
+        jwks: createLocalJWKSet({ keys: [publicJwk] }),
+      }),
+    });
+    const token = await new SignJWT({})
+      .setProtectedHeader({ alg: "ES256", kid: "scar-test-key" })
+      .setIssuer(issuer)
+      .setAudience("authenticated")
+      .setSubject("123e4567-e89b-12d3-a456-426614174000")
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(Date.now() / 1_000) + 120)
+      .sign(privateKey);
+
+    await expect(
+      provider.authenticate(
+        new Request("https://scar.test/api", {
+          headers: { authorization: `Bearer ${token}` },
+        }),
+      ),
+    ).resolves.toEqual({
+      type: "HUMAN",
+      subject: "123e4567-e89b-12d3-a456-426614174000",
+    });
+  });
+
+  it("rejects an expired ES256 Supabase JWT verified by a controlled local JWK", async () => {
+    const { privateKey, publicKey } = await generateKeyPair("ES256");
+    const publicJwk = await exportJWK(publicKey);
+    publicJwk.kid = "scar-test-key";
+    publicJwk.alg = "ES256";
+    const issuer = "https://scar-auth.supabase.co/auth/v1";
+    const provider = new SupabaseJwksIdentityProvider({
+      issuer,
+      verifyJwt: createSupabaseJwtVerifier({
+        issuer,
+        jwks: createLocalJWKSet({ keys: [publicJwk] }),
+      }),
+    });
+    const token = await new SignJWT({})
+      .setProtectedHeader({ alg: "ES256", kid: "scar-test-key" })
+      .setIssuer(issuer)
+      .setAudience("authenticated")
+      .setSubject("123e4567-e89b-12d3-a456-426614174000")
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(Date.now() / 1_000) - 60)
+      .sign(privateKey);
+
+    await expect(
+      provider.authenticate(
+        new Request("https://scar.test/api", {
+          headers: { authorization: `Bearer ${token}` },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
   it("rejects a correctly signed token from a different issuer", async () => {
     const { privateKey, publicKey } = await generateKeyPair("ES256");
     const publicJwk = await exportJWK(publicKey);
@@ -139,6 +204,73 @@ describe("SupabaseJwksIdentityProvider", () => {
         new Request("https://scar.test/api", {
           headers: {
             authorization: `Bearer scar_agent_workspace-alpha.credential-001.${secret}`,
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
+  it("rejects an expired agent credential even when its secret matches", async () => {
+    const secret = "e".repeat(64);
+    const pepper = "p".repeat(32);
+    const provider = new AgentCredentialIdentityProvider({
+      credentialReader: {
+        async findWorkspaceAgentCredential() {
+          return {
+            workspaceId: "workspace-alpha",
+            id: "credential-001",
+            agentId: "agent-treasury",
+            secretHash: await hashAgentCredentialSecret(secret, pepper),
+            allowedOperations: ["PROPOSE_ACTION" as const],
+            status: "ACTIVE" as const,
+            createdAt: "2026-09-10T12:00:00.000Z",
+            expiresAt: "2026-09-11T12:00:00.000Z",
+          };
+        },
+      },
+      pepper,
+      now: () => "2026-09-12T12:00:00.000Z",
+    });
+
+    await expect(
+      provider.authenticate(
+        new Request("https://scar.test/api", {
+          headers: {
+            authorization: `Bearer scar_agent_workspace-alpha.credential-001.${secret}`,
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
+  it("rejects a wrong locally assembled agent credential secret", async () => {
+    const secret = "a".repeat(64);
+    const wrongSecret = "b".repeat(64);
+    const pepper = "p".repeat(32);
+    const provider = new AgentCredentialIdentityProvider({
+      credentialReader: {
+        async findWorkspaceAgentCredential() {
+          return {
+            workspaceId: "workspace-alpha",
+            id: "credential-001",
+            agentId: "agent-treasury",
+            secretHash: await hashAgentCredentialSecret(secret, pepper),
+            allowedOperations: ["PROPOSE_ACTION" as const],
+            status: "ACTIVE" as const,
+            createdAt: "2026-09-10T12:00:00.000Z",
+            expiresAt: "2026-10-10T12:00:00.000Z",
+          };
+        },
+      },
+      pepper,
+      now: () => "2026-09-12T12:00:00.000Z",
+    });
+
+    await expect(
+      provider.authenticate(
+        new Request("https://scar.test/api", {
+          headers: {
+            authorization: `Bearer scar_agent_workspace-alpha.credential-001.${wrongSecret}`,
           },
         }),
       ),

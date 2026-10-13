@@ -41,6 +41,7 @@ export interface WorkspaceSecurityPort {
     workspace: WorkspaceRecord;
     membership: WorkspaceMembershipRecord;
   }>;
+  listActiveWorkspacesForUser(userId: string): Promise<WorkspaceRecord[]>;
   findActiveWorkspaceMembership(
     workspaceId: string,
     userId: string,
@@ -69,6 +70,7 @@ export interface WorkspaceApiDependencies {
 export function createWorkspaceApi(dependencies: WorkspaceApiDependencies) {
   const api = new WorkspaceApi(dependencies);
   return {
+    listWorkspaces: api.listWorkspaces.bind(api),
     createWorkspace: api.createWorkspace.bind(api),
     addMember: api.addMember.bind(api),
     revokeMember: api.revokeMember.bind(api),
@@ -84,6 +86,18 @@ class WorkspaceApi {
   constructor(private readonly dependencies: WorkspaceApiDependencies) {
     this.now = dependencies.now ?? (() => new Date().toISOString());
     this.createId = dependencies.createId ?? (() => crypto.randomUUID());
+  }
+
+  async listWorkspaces(request: Request): Promise<Response> {
+    try {
+      const principal = await this.requireHuman(request);
+      return jsonResponse(
+        { workspaces: await this.dependencies.security.listActiveWorkspacesForUser(principal.subject) },
+        200,
+      );
+    } catch (error) {
+      return toErrorResponse(error);
+    }
   }
 
   async createWorkspace(request: Request): Promise<Response> {

@@ -1,15 +1,15 @@
-import { ChevronRight, Fingerprint, History } from "lucide-react";
+import { ChevronRight, Fingerprint } from "lucide-react";
 
+import type { Incident } from "../scar-api";
 import { PageHeading } from "../components/app-shell";
 import { StatusBadge } from "../components/status-badge";
 
-export function ScarsView({ hasScar, onOpenScar }: { hasScar: boolean; onOpenScar: () => void }) {
+export function ScarsView({ incidents, onOpenScar }: { incidents: Incident[]; onOpenScar: (incidentId: string) => void }) {
   return (
     <div className="content-wrap">
       <PageHeading eyebrow="Scars" title="Experience your agents do not lose." copy="Every Scar records what happened, why it mattered, and the safeguard future agents inherit." />
       <section className="scar-ledger" aria-label="Organizational Scars">
-        {hasScar ? <button className="scar-ledger-row primary-scar-row" type="button" onClick={onOpenScar}><span className="scar-ledger-icon"><Fingerprint /></span><span><small>INCIDENT 0042</small><strong>Unexpected settlement behavior</strong><em>Supplier Alpha</em></span><StatusBadge status="CRITICAL" tone="block" /><span className="inherited-by"><small>Inherited by</small><strong>Treasury + Procurement</strong></span><time>Sep 9</time><ChevronRight /></button> : <div className="empty-scars"><span><Fingerprint /></span><h2>No organizational Scars yet.</h2><p>When an unsafe outcome is recorded, the lesson will appear here and protect future agents.</p></div>}
-        <button className="scar-ledger-row" type="button" disabled aria-label="Incident 0039 unavailable in this demo"><span className="scar-ledger-icon muted"><History /></span><span><small>INCIDENT 0039</small><strong>Unverified API permission request</strong><em>Index API</em></span><StatusBadge status="MEDIUM" tone="review" /><span className="inherited-by"><small>Inherited by</small><strong>Research</strong></span><time>Sep 7</time><ChevronRight /></button>
+        {incidents.length === 0 ? <div className="empty-scars"><span><Fingerprint /></span><h2>No organizational Scars yet.</h2><p>When an unsafe outcome is recorded, the lesson will appear here and protect future agents.</p></div> : incidents.map((incident) => <button key={incident.id} className="scar-ledger-row primary-scar-row" type="button" onClick={() => onOpenScar(incident.id)}><span className="scar-ledger-icon"><Fingerprint /></span><span><small>{incident.id}</small><strong>{incident.reason}</strong><em>{incident.entityId}</em></span><StatusBadge status={incident.severity} tone={incident.severity === "LOW" ? "neutral" : incident.severity === "MEDIUM" ? "review" : "block"} /><span className="inherited-by"><small>Memory state</small><strong>Persisted locally</strong></span><time>{new Date(incident.createdAt).toLocaleDateString()}</time><ChevronRight /></button>)}
       </section>
     </div>
   );

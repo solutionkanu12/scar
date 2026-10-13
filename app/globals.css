@@ -125,6 +125,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 
 .activity-section { margin-top: 64px; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
+.section-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .section-heading h2, .incident-evidence > h2 { margin: 0; font-family: var(--font-fredoka), sans-serif; font-size: 23px; font-weight: 650; }
 .section-heading p { margin: 3px 0 0; color: var(--muted); font-size: 14px; font-weight: 700; }
 .live-label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 900; }
@@ -674,4 +675,34 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 
 @media (prefers-reduced-motion: reduce) {
   .hero-copy, .hero-product { opacity: 1; transform: none; }
+}
+
+/* Auth and backend-state additions reuse the existing SCAR console palette. */
+.auth-shell { display: grid; min-height: 100vh; place-items: center; background: var(--canvas); padding: 32px 16px; }
+.auth-card { display: grid; width: min(460px, calc(100vw - 32px)); gap: 18px; border: 1px solid var(--line); border-radius: 26px; background: var(--paper); padding: 34px; box-shadow: 0 18px 45px rgb(43 39 28 / 9%); }
+.auth-card h1 { margin: 0; font-size: clamp(36px, 6vw, 50px); }
+.auth-card > *, .auth-card form { min-width: 0; }
+.auth-card > p { margin: 0; color: var(--body); font-weight: 650; line-height: 1.55; }
+.auth-card form { display: grid; gap: 14px; }
+.auth-card label, .incident-dialog label { display: grid; gap: 7px; color: var(--ink); font-size: 12px; font-weight: 800; }
+.auth-switch { justify-self: start; border: 0; background: transparent; color: var(--olive); padding: 3px 0; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.form-error { margin: 0; color: #b64738; font-size: 13px; font-weight: 800; line-height: 1.45; overflow-wrap: anywhere; }
+.workspace-picker { display: grid; gap: 6px; margin: 0 0 14px; color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.workspace-picker select { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); padding: 8px; font: inherit; font-size: 12px; font-weight: 800; }
+.api-failure { display: flex; align-items: center; gap: 12px; margin: 20px 28px 0; border: 1px solid #efc2b8; border-radius: 14px; background: #fff7f3; padding: 12px 14px; color: #8e3429; }
+.api-failure > svg { flex: 0 0 auto; }
+.api-failure > div { display: grid; flex: 1; gap: 2px; }
+.api-failure strong { font-size: 13px; }
+.api-failure span { font-size: 11px; font-weight: 700; }
+.memory-pending { align-items: center; margin-top: 16px; }
+.memory-pending .scar-button { margin-left: auto; white-space: nowrap; }
+.incident-agent-scope { display: grid; gap: 8px; border: 0; padding: 0; }
+.incident-agent-scope legend { margin-bottom: 4px; color: var(--ink); font-size: 12px; font-weight: 800; }
+.incident-agent-scope label { display: flex; align-items: center; gap: 8px; }
+
+@media (max-width: 720px) {
+  .auth-card { border-radius: 20px; padding: 24px; }
+  .api-failure { align-items: flex-start; flex-wrap: wrap; margin: 14px 16px 0; }
+  .api-failure .scar-button { margin-left: 28px; }
+  .workspace-picker { margin-inline: 10px; }
 }

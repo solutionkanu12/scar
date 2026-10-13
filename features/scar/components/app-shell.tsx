@@ -1,7 +1,8 @@
 import type { ReactNode, Ref } from "react";
 import { Activity, Fingerprint, Menu, RefreshCw, ShieldCheck, Users, X } from "lucide-react";
 
-import type { FlowStep, View } from "../types";
+import type { Workspace } from "../scar-api";
+import type { View } from "../types";
 import { ScarMark } from "./brand";
 
 interface AppShellProps {
@@ -11,13 +12,15 @@ interface AppShellProps {
   mobileNav: boolean;
   onHome: () => void;
   onNavigate: (view: View) => void;
-  onReset: () => void;
+  onSignOut: () => void;
+  onWorkspaceChange: (workspaceId: string) => void;
   onToggleMobileNav: () => void;
-  step: FlowStep;
   view: View;
+  workspace: Workspace;
+  workspaces: Workspace[];
 }
 
-export function AppShell({ children, contentRef, hasScar, mobileNav, onHome, onNavigate, onReset, onToggleMobileNav, step, view }: AppShellProps) {
+export function AppShell({ children, contentRef, hasScar, mobileNav, onHome, onNavigate, onSignOut, onWorkspaceChange, onToggleMobileNav, view, workspace, workspaces }: AppShellProps) {
   return (
     <div className="scar-app">
       <header className="mobile-header">
@@ -43,11 +46,17 @@ export function AppShell({ children, contentRef, hasScar, mobileNav, onHome, onN
           <button className={view === "scars" || view === "scar-detail" ? "nav-link active" : "nav-link"} type="button" onClick={() => onNavigate("scars")}><Fingerprint />Scars{hasScar && <span className="nav-count">1</span>}</button>
         </nav>
         <div className="sidebar-spacer" />
+        <label className="workspace-picker">
+          <span>Workspace</span>
+          <select aria-label="Active workspace" value={workspace.id} onChange={(event) => onWorkspaceChange(event.target.value)}>
+            {workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
         <div className="protection-note">
           <span className="protection-icon"><ShieldCheck /></span>
           <div><strong>System protected</strong><span>Sibyl Memory available</span></div>
         </div>
-        {step !== "initial" && <button className="reset-link" type="button" onClick={onReset}><RefreshCw />Reset activity</button>}
+        <button className="reset-link" type="button" onClick={onSignOut}><RefreshCw />Sign out</button>
       </aside>
 
       <main className="main-shell" ref={contentRef} tabIndex={-1}>{children}</main>

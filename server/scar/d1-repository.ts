@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 
 import * as schema from "@/db/schema";
@@ -93,6 +93,15 @@ export class D1ScarRepository implements ScarRepository {
     return agentSchema.parse(withoutWorkspaceScope(rows[0]));
   }
 
+  async listAgents(): Promise<Agent[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.agents)
+      .where(eq(schema.agents.workspaceId, this.workspaceId))
+      .orderBy(schema.agents.name);
+    return rows.map((row) => agentSchema.parse(withoutWorkspaceScope(row)));
+  }
+
   async saveAction(input: unknown): Promise<ProtectedAction> {
     const action = protectedActionSchema.parse(input);
     const existing = await this.findActionById(action.id);
@@ -135,6 +144,17 @@ export class D1ScarRepository implements ScarRepository {
 
     if (rows.length === 0) return null;
     return protectedActionSchema.parse(withoutWorkspaceScope(rows[0]));
+  }
+
+  async listActions(): Promise<ProtectedAction[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.protectedActions)
+      .where(eq(schema.protectedActions.workspaceId, this.workspaceId))
+      .orderBy(desc(schema.protectedActions.proposedAt));
+    return rows.map((row) =>
+      protectedActionSchema.parse(withoutWorkspaceScope(row)),
+    );
   }
 
   async appendIncident(input: unknown): Promise<Incident> {

@@ -112,7 +112,8 @@ describe("workspace bootstrap API", () => {
 
   it("lets an OWNER revoke a member without granting or preserving an authorization path", async () => {
     const revokeWorkspaceMember = vi.fn(async (input: unknown) => ({
-      ...(input as object),
+      workspaceId: (input as { workspaceId: string }).workspaceId,
+      userId: (input as { userId: string }).userId,
       membership: "MEMBER" as const,
       status: "REVOKED" as const,
       addedBy: ownerId,
@@ -154,6 +155,7 @@ function createApi(input: {
       authenticate: async () => ({ type: "HUMAN" as const, subject: ownerId }),
     },
     security: {
+      listActiveWorkspacesForUser: async () => [],
       createWorkspaceForOwner:
         input.createWorkspaceForOwner ??
         (async () => {

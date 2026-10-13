@@ -110,6 +110,33 @@ export class D1ScarSecurityRepository {
     return rows.length === 0 ? null : workspaceRecordSchema.parse(rows[0]);
   }
 
+  /** Returns only active workspaces with an active membership for this user. */
+  async listActiveWorkspacesForUser(userId: string): Promise<WorkspaceRecord[]> {
+    const rows = await this.db
+      .select({
+        id: schema.scarWorkspaces.id,
+        name: schema.scarWorkspaces.name,
+        kind: schema.scarWorkspaces.kind,
+        status: schema.scarWorkspaces.status,
+        createdAt: schema.scarWorkspaces.createdAt,
+      })
+      .from(schema.scarWorkspaces)
+      .innerJoin(
+        schema.scarWorkspaceMemberships,
+        and(
+          eq(
+            schema.scarWorkspaceMemberships.workspaceId,
+            schema.scarWorkspaces.id,
+          ),
+          eq(schema.scarWorkspaceMemberships.userId, userId),
+          eq(schema.scarWorkspaceMemberships.status, "ACTIVE"),
+        ),
+      )
+      .where(eq(schema.scarWorkspaces.status, "ACTIVE"))
+      .orderBy(asc(schema.scarWorkspaces.createdAt));
+    return rows.map((row) => workspaceRecordSchema.parse(row));
+  }
+
   async findActiveWorkspaceMembership(
     workspaceId: string,
     userId: string,

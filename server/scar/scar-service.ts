@@ -83,6 +83,10 @@ export class ScarService {
     return this.repository.findAgentById(identifierSchema.parse(agentId));
   }
 
+  async listAgents() {
+    return this.repository.listAgents();
+  }
+
   async proposeAction(input: unknown) {
     return this.repository.saveAction(protectedActionSchema.parse(input));
   }
@@ -189,6 +193,21 @@ export class ScarService {
       this.repository.findIncidentsForAction(action.id),
     ]);
     return { action, authorization, approval, execution, incidents };
+  }
+
+  async listActionStates(): Promise<ScarActionState[]> {
+    const actions = await this.repository.listActions();
+    return Promise.all(
+      actions.map(async (action) => {
+        const [authorization, approval, execution, incidents] = await Promise.all([
+          this.repository.findAuthorizationForAction(action.id),
+          this.repository.findApprovalForAction(action.id),
+          this.repository.findExecutionForAction(action.id),
+          this.repository.findIncidentsForAction(action.id),
+        ]);
+        return { action, authorization, approval, execution, incidents };
+      }),
+    );
   }
 
   private async persistOrReuseIncident(bundle: ScarMemoryBundle): Promise<Incident> {

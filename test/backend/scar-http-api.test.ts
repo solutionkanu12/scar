@@ -6,6 +6,11 @@ import {
   createScarHttpApi,
   type ScarHttpApiDependencies,
 } from "@/server/scar/http/api";
+import {
+  AgentCredentialIdentityProvider,
+  hashAgentCredentialSecret,
+} from "@/server/scar/http/identity";
+import type { AgentCredentialRecord } from "@/server/scar/http/contracts";
 import { ScarMemoryPersistenceError } from "@/server/scar/scar-service";
 
 const timestamp = "2026-10-02T12:00:00.000Z";
@@ -202,7 +207,149 @@ describe("SCAR HTTP API", () => {
     expect(approveAction).not.toHaveBeenCalled();
   });
 
-  it("issues a scoped agent credential once without persisting its raw secret", async () => {
+  it("issues a scoped agent credential once without returning a raw bearer credential", async () => {
+    const saveAgentCredential = vi.fn(async (_input: unknown) => undefined);
+    const appendHttpAudit = vi.fn(async (_input: unknown) => undefined);
+    const api = createApi({
+      principal: { type: "HUMAN", subject: operatorId },
+      role: "ADMIN",
+      service: {
+        getAgent: async () => ({
+          id: "agent-treasury",
+          name: "Treasury Agent",
+          role: "Moves approved company funds",
+          status: "ACTIVE",
+          permissions: ["USDC_TRANSFER" as const],
+        }),
+      },
+      saveAgentCredential,
+      appendHttpAudit,
+      agentCredentialPepper: "p".repeat(32),
+    });
+
+    const response = await api.issueAgentCredential(
+      jsonRequest("https://scar.test/api/scar/agents/agent-treasury/credentials", {
+        allowedOperations: ["PROPOSE_ACTION", "READ_ACTION"],
+        expiresAt: "2026-10-03T12:00:00.000Z",
+        secret: "s".repeat(64),
+      }),
+      "agent-treasury",
+    );
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toEqual({
+      credential: {
+        id: "credential:http-001",
+        workspaceId: "workspace-alpha",
+        agentId: "agent-treasury",
+        allowedOperations: ["PROPOSE_ACTION", "READ_ACTION"],
+        status: "ACTIVE",
+        createdAt: timestamp,
+        expiresAt: "2026-10-03T12:00:00.000Z",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("token");
+    expect(JSON.stringify(body)).not.toContain("secret");
+    expect(JSON.stringify(body)).not.toContain("secretHash");
+    expect(JSON.stringify(body)).not.toContain("scar_agent_");
+    expect(JSON.stringify(body)).not.toContain("s".repeat(64));
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(saveAgentCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "credential:http-001",
+        workspaceId: "workspace-alpha",
+        agentId: "agent-treasury",
+        secretHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    );
+    expect(saveAgentCredential.mock.calls[0][0]).not.toHaveProperty("token");
+    expect(saveAgentCredential.mock.calls[0][0]).not.toHaveProperty("secret");
+    const saved = saveAgentCredential.mock.calls[0][0] as { secretHash: string };
+    expect(saved.secretHash).toBe(
+      await hashAgentCredentialSecret("s".repeat(64), "p".repeat(32)),
+    );
+    expect(appendHttpAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "CREDENTIAL_ISSUE",
+        outcome: "ACCEPTED",
+      }),
+    );
+    expect(JSON.stringify(appendHttpAudit.mock.calls[0][0])).not.toContain(
+      "s".repeat(64),
+    );
+    expect(JSON.stringify(appendHttpAudit.mock.calls[0][0])).not.toContain(
+      "scar_agent_",
+    );
+    expect(JSON.stringify(appendHttpAudit.mock.calls[0][0])).not.toContain(
+      "secretHash",
+    );
+  });
+
+  it("authenticates a bearer credential assembled locally from issuance metadata", async () => {
+    let stored: AgentCredentialRecord | null = null;
+    const secret = "s".repeat(64);
+    const api = createApi({
+      principal: { type: "HUMAN", subject: operatorId },
+      role: "ADMIN",
+      service: {
+        getAgent: async () => ({
+          id: "agent-treasury",
+          name: "Treasury Agent",
+          role: "Moves approved company funds",
+          status: "ACTIVE",
+          permissions: ["USDC_TRANSFER" as const],
+        }),
+      },
+      saveAgentCredential: async (credential) => {
+        stored = credential as AgentCredentialRecord;
+      },
+      agentCredentialPepper: "p".repeat(32),
+    });
+
+    const issued = await api.issueAgentCredential(
+      jsonRequest("https://scar.test/api/scar/workspaces/workspace-alpha/agents/agent-treasury/credentials", {
+        allowedOperations: ["PROPOSE_ACTION", "READ_ACTION"],
+        expiresAt: "2026-10-03T12:00:00.000Z",
+        secret,
+      }),
+      "agent-treasury",
+    );
+    const body = await issued.json() as {
+      credential: { id: string; workspaceId: string };
+    };
+    const provider = new AgentCredentialIdentityProvider({
+      credentialReader: {
+        async findWorkspaceAgentCredential() {
+          return stored;
+        },
+      },
+      pepper: "p".repeat(32),
+      now: () => timestamp,
+    });
+
+    await expect(
+      provider.authenticate(
+        new Request("https://scar.test/api", {
+          headers: {
+            authorization:
+              `Bearer scar_agent_${body.credential.workspaceId}.${body.credential.id}.${secret}`,
+          },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      type: "AGENT",
+      subject: body.credential.id,
+      workspaceId: "workspace-alpha",
+      agentId: "agent-treasury",
+      allowedOperations: ["PROPOSE_ACTION", "READ_ACTION"],
+    });
+  });
+
+  it.each([
+    ["too-short", "a".repeat(63)],
+    ["invalid", `${"a".repeat(63)}=`],
+  ])("rejects a %s caller-generated credential secret before persistence", async (_kind, secret) => {
     const saveAgentCredential = vi.fn(async (_input: unknown) => undefined);
     const api = createApi({
       principal: { type: "HUMAN", subject: operatorId },
@@ -218,36 +365,93 @@ describe("SCAR HTTP API", () => {
       },
       saveAgentCredential,
       agentCredentialPepper: "p".repeat(32),
-      createCredentialSecret: () => "s".repeat(43),
     });
 
     const response = await api.issueAgentCredential(
       jsonRequest("https://scar.test/api/scar/agents/agent-treasury/credentials", {
-        allowedOperations: ["PROPOSE_ACTION", "READ_ACTION"],
+        allowedOperations: ["READ_ACTION"],
+        expiresAt: "2026-10-03T12:00:00.000Z",
+        secret,
+      }),
+      "agent-treasury",
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(body).toBe(JSON.stringify({ error: { code: "INVALID_REQUEST" } }));
+    expect(body).not.toContain(secret);
+    expect(saveAgentCredential).not.toHaveBeenCalled();
+  });
+
+  it("rejects credential issuance that omits the caller-generated secret", async () => {
+    const saveAgentCredential = vi.fn(async (_input: unknown) => undefined);
+    const api = createApi({
+      principal: { type: "HUMAN", subject: operatorId },
+      role: "ADMIN",
+      service: {
+        getAgent: async () => ({
+          id: "agent-treasury",
+          name: "Treasury Agent",
+          role: "Moves approved company funds",
+          status: "ACTIVE",
+          permissions: ["USDC_TRANSFER" as const],
+        }),
+      },
+      saveAgentCredential,
+      agentCredentialPepper: "p".repeat(32),
+    });
+
+    const response = await api.issueAgentCredential(
+      jsonRequest("https://scar.test/api/scar/agents/agent-treasury/credentials", {
+        allowedOperations: ["READ_ACTION"],
         expiresAt: "2026-10-03T12:00:00.000Z",
       }),
       "agent-treasury",
     );
 
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
-      credential: {
-        id: "credential:http-001",
-        agentId: "agent-treasury",
-        allowedOperations: ["PROPOSE_ACTION", "READ_ACTION"],
-      },
-      token: `scar_agent_workspace-alpha.credential:http-001.${"s".repeat(43)}`,
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST" },
     });
-    expect(saveAgentCredential).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "credential:http-001",
-        workspaceId: "workspace-alpha",
-        agentId: "agent-treasury",
-        secretHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    expect(saveAgentCredential).not.toHaveBeenCalled();
+  });
+
+  it("does not expose supplied credential material when credential issuance fails", async () => {
+    const secret = "s".repeat(64);
+    const expectedHash = await hashAgentCredentialSecret(secret, "p".repeat(32));
+    const api = createApi({
+      principal: { type: "HUMAN", subject: operatorId },
+      role: "ADMIN",
+      service: {
+        getAgent: async () => ({
+          id: "agent-treasury",
+          name: "Treasury Agent",
+          role: "Moves approved company funds",
+          status: "ACTIVE",
+          permissions: ["USDC_TRANSFER" as const],
+        }),
+      },
+      saveAgentCredential: async () => {
+        throw new Error(`persistence failed for ${secret}`);
+      },
+      agentCredentialPepper: "p".repeat(32),
+    });
+
+    const response = await api.issueAgentCredential(
+      jsonRequest("https://scar.test/api/scar/agents/agent-treasury/credentials", {
+        allowedOperations: ["READ_ACTION"],
+        expiresAt: "2026-10-03T12:00:00.000Z",
+        secret,
       }),
+      "agent-treasury",
     );
-    expect(saveAgentCredential.mock.calls[0][0]).not.toHaveProperty("token");
-    expect(saveAgentCredential.mock.calls[0][0]).not.toHaveProperty("secret");
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(body).toBe(JSON.stringify({ error: { code: "DEPENDENCY_UNAVAILABLE" } }));
+    expect(body).not.toContain(secret);
+    expect(body).not.toContain(expectedHash);
+    expect(body).not.toContain(`scar_agent_workspace-alpha.credential:http-001.${secret}`);
   });
 
   it("will not revoke a credential through a different agent resource", async () => {
@@ -275,6 +479,76 @@ describe("SCAR HTTP API", () => {
     );
     expect(response.status).toBe(404);
     expect(revokeAgentCredential).not.toHaveBeenCalled();
+  });
+
+  it("returns the opaque workspace-not-found response for every cross-workspace resource route", async () => {
+    const api = createApi({
+      principal: {
+        type: "AGENT",
+        subject: "credential-001",
+        workspaceId: "workspace-beta",
+        agentId: "agent-treasury",
+        allowedOperations: ["PROPOSE_ACTION", "READ_ACTION"],
+      },
+      agentCredentialPepper: "p".repeat(32),
+    });
+    const actionId = "action-001";
+    const routes: Array<{ resource: string; invoke: () => Promise<Response> }> = [
+      {
+        resource: "agents",
+        invoke: () => api.listAgents(new Request("https://scar.test/api/scar/workspaces/workspace-alpha/agents")),
+      },
+      {
+        resource: "actions",
+        invoke: () => api.listActionStates(new Request("https://scar.test/api/scar/workspaces/workspace-alpha/actions")),
+      },
+      {
+        resource: "approvals",
+        invoke: () => api.approveAction(
+          jsonRequest(`https://scar.test/api/scar/workspaces/workspace-alpha/actions/${actionId}/approvals`, {
+            authorizationId: "authorization-001",
+          }),
+          actionId,
+        ),
+      },
+      {
+        resource: "incidents",
+        invoke: () => api.recordIncident(
+          jsonRequest(`https://scar.test/api/scar/workspaces/workspace-alpha/actions/${actionId}/incidents`, incidentRequestBody(), {
+            "idempotency-key": "cross-workspace-incident-001",
+          }),
+          actionId,
+        ),
+      },
+      {
+        resource: "outcomes",
+        invoke: () => api.recordOutcome(
+          jsonRequest(`https://scar.test/api/scar/workspaces/workspace-alpha/actions/${actionId}/outcomes`, incidentRequestBody(), {
+            "idempotency-key": "cross-workspace-outcome-001",
+          }),
+          actionId,
+        ),
+      },
+      {
+        resource: "credentials",
+        invoke: () => api.issueAgentCredential(
+          jsonRequest("https://scar.test/api/scar/workspaces/workspace-alpha/agents/agent-treasury/credentials", {
+            allowedOperations: ["READ_ACTION"],
+            expiresAt: "2026-10-03T12:00:00.000Z",
+            secret: "s".repeat(64),
+          }),
+          "agent-treasury",
+        ),
+      },
+    ];
+
+    for (const route of routes) {
+      const response = await route.invoke();
+      expect(response.status, route.resource).toBe(404);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "WORKSPACE_NOT_FOUND" },
+      });
+    }
   });
 
   it("does not accept an execution outcome before an execution exists", async () => {
@@ -432,6 +706,7 @@ function createApi(input: {
   rateAllowed?: boolean;
   service?: Record<string, unknown>;
   saveAgentCredential?: (input: unknown) => Promise<void>;
+  appendHttpAudit?: (input: unknown) => Promise<void>;
   findAgentCredential?: (id: string) => Promise<{
     workspaceId: string;
     id: string;
@@ -444,7 +719,6 @@ function createApi(input: {
   } | null>;
   revokeAgentCredential?: (id: string, revokedAt: string) => Promise<void>;
   agentCredentialPepper?: string;
-  createCredentialSecret?: () => string;
   executionEnabled?: boolean;
 }) {
   return createScarHttpApi({
@@ -460,7 +734,7 @@ function createApi(input: {
       }),
       findActiveHumanRoles: async () => (input.role ? [input.role] : []),
       claimRateLimit: async () => input.rateAllowed ?? true,
-      appendHttpAudit: async () => undefined,
+      appendHttpAudit: input.appendHttpAudit ?? (async () => undefined),
       saveAgentCredential: input.saveAgentCredential ?? (async () => undefined),
       findWorkspaceAgentCredential: async (_workspaceId, credentialId) =>
         input.findAgentCredential?.(credentialId) ?? null,
@@ -476,7 +750,6 @@ function createApi(input: {
     agentCredentialPepper: input.agentCredentialPepper,
     now: () => timestamp,
     createId: () => "http-001",
-    createCredentialSecret: input.createCredentialSecret,
     executionConfigurationAllows: () => input.executionEnabled !== false,
   });
 }
